@@ -25,6 +25,8 @@ import telnetlib
 import tempfile
 import uuid
 from collections import defaultdict
+
+#import TTP and templates
 from ttp import ttp
 
 from netmiko import FileTransfer, InLineTransfer
@@ -94,87 +96,39 @@ AFI_COMMAND_MAP = {
     "VPNv6 Flowspec": "ipv6 flowspec",
 }
 
-ios_ttp_templates = {
-    "get_facts": """
-<template results="per_template"
-decription="
-On Success returns something like:
-[[   {   'result': {   'fqdn': 'CSR1kv-4.lab.io',
-                      'hostname': 'CSR1kv-4',
-                      'interface_list': ['GigabitEthernet1',
-                                         'GigabitEthernet2']
-                      'model': 'CSR1000V',
-                      'os_version': '[Gibraltar], Virtual XE Software '
-                                    '(X86_64_LINUX_IOSD-UNIVERSALK9-M), '
-                                    'Version 16.10.1a, RELEASE SOFTWARE (fc2)',
-                      'serial_number': '95SF11P5A5A',
-                      'uptime': '7380',
-                      'vendor': 'Cisco'}}]]
-"
->
-
-<input name="show_ver"       commands="show version"/>
-<input name="show_hosts"     commands="show hosts"/>
-<input name="show_ip_int_br" commands="show ip interface brief"/>
-
-<group name="result**" default="Unknown" input="show_ver">
-Cisco IOS Software  {{ os_version | PHRASE | _start_ }}
-Cisco IOS Software, {{ os_version | PHRASE | _start_ }}
-{{ hostname | record("hostname") }} uptime is {{ uptime | PHRASE | uptimeparse }}
-cisco {{ model | PHRASE | split(" ") | item("0") }} bytes of memory.
-{{ model | PHRASE }} processor with {{ ignore }} bytes of memory.
-Processor board ID {{ serial_number }}
-{{ vendor | set("Cisco") }} 
-</group>
-
-<group name="result**" 
-default="Unknown" input="show_hosts" 
-sformat="string='{hostname}.{fqdn}', add_field='fqdn'"
->
-Default domain is {{ fqdn }}
-</group>
-
-<group name="result**.interface_list" itemize="interface">
-{{ interface | _start_ }}   {{ ignore }} YES {{ ignore(".+") }}
-{{ interface | _start_ }}   {{ ignore }} NO  {{ ignore(".+") }}
-</group>
-
-</template>
-        """,
-    "get_interfaces": """
-<input commands="show interfaces"/>
-
-<macro>
-def process_group(data):
-    # check speedformat
-    if "Kb" in data.get("speedformat", ""):
-        data["speed"] = data["speed"] / 1000
-        data.pop("speedformat")
-    elif "Gb" in data.get("speedformat", ""):
-        data["speed"] = data["speed"] * 1000
-        data.pop("speedformat")
-    # check enabled/up
-    data["is_enabled"] = not bool("admin" in data["is_enabled"])
-    data["is_up"] = bool("up" in data["is_up"])
-    return data
-</macro>
-
-<group name="interfaces.{{ interface }}" macro="process_group" default="">
-{{ interface }} is {{ is_enabled | ORPHRASE | default(None) | lower }}, line protocol is {{ is_up | ORPHRASE | default(None) | lower }}
-  Hardware is {{ ignore }}, address is {{ mac_address | mac_eui | upper }} (bia {{ ignore }})
-  Description: {{ description | ORPHRASE }}
-  MTU 1500 bytes, BW {{ speed | to_int }} {{ speedformat }}/sec, DLY 1000 usec,
-  {{ last_flapped | set(-1) }}
-</group>
-"""
-}
 class getter():
-	
-	def __init__(self, template_name):
-		self.template_name = template_name
-		
-	def __call__(self):
-		
+    """
+    Class to dynamically add to driver object as method
+    for each getter TTP template we define
+    """
+    def __init__(self, driver_obj, filename):
+        self.driver_obj = driver_obj
+        with open(filename, "r") as f:
+            self.template = f.read()
+        
+
+    def getter(self):
+        commands_output = {}
+        result = {}
+        prompt = self.driver_obj.device.find_prompt()
+        parser = ttp(template=self.template)
+        inputs_commands = parser.get_input_commands_dict()
+        # obtain output from device
+        for input_name, commands_list in inputs_commands.items():
+            commands_output[input_name] = ""
+            for command in commands_list:
+                 command_output = self.driver_obj._send_command(command)
+                 commands_output[input_name] += "\n{}{}\n{}\n".format(prompt, command, command_output)
+        # parse commands output
+        for input_name, output in commands_output.items():
+            parser.add_input(data=output, input_name=input_name)
+        parser.parse()
+        result.update(parser.result()[0][0]["result"])
+        return result    
+        
+    def __call__(self):
+        return self.getter()
+        
 
 class IOSDriver_TTP(NetworkDriver):
     """NAPALM Cisco IOS Handler."""
@@ -189,6 +143,9 @@ class IOSDriver_TTP(NetworkDriver):
         self.timeout = timeout
 
         self.transport = optional_args.get("transport", "ssh")
+        
+        #add getters to object
+        self.set_getters()
 
         # Retrieve file names
         self.candidate_cfg = optional_args.get("candidate_cfg", "candidate_config.txt")
@@ -224,6 +181,17 @@ class IOSDriver_TTP(NetworkDriver):
         self.profile = [self.platform]
         self.use_canonical_interface = optional_args.get("canonical_int", False)
 
+    def set_getters(self):
+        # load all available templates names
+        path = "{}/utils/ttp_templates/".format(os.path.dirname(__file__))
+        templates = [f.split(".")[0] 
+                     for f in os.listdir(path) if os.path.isfile(path + f)]      
+        # add methods to driver
+        [setattr(self, name, getter(
+                    driver_obj=self,
+                    filename="{}{}.txt".format(path, name))
+                )
+         for name in templates]
     
     def open(self):
         """Open a connection to the device."""
@@ -992,60 +960,7 @@ class IOSDriver_TTP(NetworkDriver):
             + (hours * 3600)
             + (minutes * 60)
         )
-        return uptime_sec
-
-    def getter(self, template_name, path):
-        commands_output = {}
-        result = {}
-        prompt = self.device.find_prompt()
-        parser = ttp(template=ios_ttp_templates[template_name])
-        inputs_commands = parser.get_input_commands_dict()
-        # obtain output from device
-        for input_name, commands_list in inputs_commands.items():
-            commands_output[input_name] = ""
-            for command in commands_list:
-                 command_output = self._send_command(command)
-                 commands_output[input_name] += "\n{}{}\n{}\n".format(prompt, command, command_output)
-        # parse commands output
-        for input_name, output in commands_output.items():
-            parser.add_input(data=output, input_name=input_name)
-        parser.parse()
-        result.update(parser.result()[0][0][path])
-        return result		
-		
-    def get_facts(self):
-        """Return a set of facts from the devices."""
-        # default values.
-        result = {
-            "uptime": "Uncknown",
-            "vendor": "Cisco",
-            "os_version": "Uncknown",
-            "serial_number": "Uncknown",
-            "model": "Uncknown",
-            "hostname": "Uncknown",
-            "fqdn": "Uncknown",
-            "interface_list": []
-        }
-        result.update(self.getter(template_name="get_facts", path="result"))
-        return result
-
-
-    def get_interfaces(self):
-        """
-        Get interface details.
-
-        Example Output:
-
-        { u'Vlan200': {   'description': u'Voice Network',
-                          'is_enabled': True,
-                          'is_up': True,
-                          'last_flapped': -1.0,
-                          'mac_address': u'a493.4cc1.67a7',
-                          'speed': 100}}
-        """
-        result = {}
-        result.update(self.getter(template_name="get_interfaces", path="interfaces"))
-        return result
+        return uptime_sec    
 
     def get_interfaces_ip(self):
         """

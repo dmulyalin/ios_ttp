@@ -1,0 +1,43 @@
+<template results="per_template"
+decription="
+Sample Output:
+[[   {   'result': {   'fqdn': 'CSR1kv-4.lab.io',
+                      'hostname': 'CSR1kv-4',
+                      'interface_list': ['GigabitEthernet1',
+                                         'GigabitEthernet2']
+                      'model': 'CSR1000V',
+                      'os_version': '[Gibraltar], Virtual XE Software '
+                                    '(X86_64_LINUX_IOSD-UNIVERSALK9-M), '
+                                    'Version 16.10.1a, RELEASE SOFTWARE (fc2)',
+                      'serial_number': '95SF11P5A5A',
+                      'uptime': '7380',
+                      'vendor': 'Cisco'}}]]
+">
+
+<input name="show_ver"       commands="show version"/>
+<input name="show_hosts"     commands="show hosts"/>
+<input name="show_ip_int_br" commands="show ip interface brief"/>
+
+<group name="result**" default="Unknown" input="show_ver">
+Cisco IOS Software  {{ os_version | PHRASE | _start_ }}
+Cisco IOS Software, {{ os_version | PHRASE | _start_ }}
+{{ hostname | record("hostname") }} uptime is {{ uptime | PHRASE | uptimeparse }}
+cisco {{ model | PHRASE | split(" ") | item("0") }} bytes of memory.
+{{ model | PHRASE }} processor with {{ ignore }} bytes of memory.
+Processor board ID {{ serial_number }}
+{{ vendor | set("Cisco") }} 
+</group>
+
+<group name="result**" 
+default="Unknown" input="show_hosts" 
+sformat="string='{hostname}.{fqdn}', add_field='fqdn'"
+>
+Default domain is {{ fqdn }}
+</group>
+
+<group name="result**.interface_list" itemize="interface">
+{{ interface | _start_ }}   {{ ignore }} YES {{ ignore(".+") }}
+{{ interface | _start_ }}   {{ ignore }} NO  {{ ignore(".+") }}
+</group>
+
+</template>

@@ -1,0 +1,34 @@
+<!--
+Sample Output:
+
+{ u'Vlan200': {   'description': u'Voice Network',
+                  'is_enabled': True,
+                  'is_up': True,
+                  'last_flapped': -1.0,
+                  'mac_address': u'a493.4cc1.67a7',
+                  'speed': 100}}
+-->
+<input commands="show interfaces"/>
+
+<macro>
+def process_group(data):
+    # check speedformat
+    if "Kb" in data.get("speedformat", ""):
+        data["speed"] = data["speed"] / 1000
+        data.pop("speedformat")
+    elif "Gb" in data.get("speedformat", ""):
+        data["speed"] = data["speed"] * 1000
+        data.pop("speedformat")
+    # check enabled/up
+    data["is_enabled"] = not bool("admin" in data["is_enabled"])
+    data["is_up"] = bool("up" in data["is_up"])
+    return data
+</macro>
+
+<group name="result.{{ interface }}" macro="process_group" default="">
+{{ interface }} is {{ is_enabled | ORPHRASE | default(None) | lower }}, line protocol is {{ is_up | ORPHRASE | default(None) | lower }}
+  Hardware is {{ ignore }}, address is {{ mac_address | mac_eui | upper }} (bia {{ ignore }})
+  Description: {{ description | ORPHRASE }}
+  MTU 1500 bytes, BW {{ speed | to_int }} {{ speedformat }}/sec, DLY 1000 usec,
+  {{ last_flapped | set(-1) }}
+</group>
