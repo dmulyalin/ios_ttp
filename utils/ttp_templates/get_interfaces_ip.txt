@@ -1,0 +1,60 @@
+<template results="per_template"
+decription="
+Get interface ip details.
+
+Returns a dict of dicts
+		
+Sample Output:
+
+[ {'result': {   u'FastEthernet8': {   'ipv4': {   u'10.66.43.169': {   'prefix_length': 22}}},
+            u'Loopback555': {   'ipv4': {   u'192.168.1.1': {   'prefix_length': 24}},
+                                'ipv6': {   u'1::1': {   'prefix_length': 64},
+                                            u'2001:DB8:1::1': {   'prefix_length': 64},
+                                            u'2::': {   'prefix_length': 64},
+                                            u'FE80::3': {   'prefix_length': 10}}},
+            u'Tunnel0': {   'ipv4': {   u'10.63.100.9': {   'prefix_length': 24}}},
+            u'Tunnel1': {   'ipv4': {   u'10.63.101.9': {   'prefix_length': 24}}},
+            u'Vlan100': {   'ipv4': {   u'10.40.0.1': {   'prefix_length': 24},
+                                        u'10.41.0.1': {   'prefix_length': 24},
+                                        u'10.65.0.1': {   'prefix_length': 24}}},
+            u'Vlan200': {   'ipv4': {   u'10.63.176.57': {   'prefix_length': 29}}}}}]
+"
+>
+
+<input name="show_ip_interface"   commands="show ip interface"/>
+<input name="show_ipv6_interface" commands="show ipv6 interface"/>
+
+<group name="result**.{{ interface }}**" input="show_ip_interface">
+{{ interface }} is {{ ignore("ORPHRASE") }}, line protocol is {{ ignore("ORPHRASE") }}
+<group name="ipv4**.{{ ipv4 }}">
+  Internet address is {{ ipv4 }}/{{ prefix_length }}
+</group>
+<group name="ipv4**.{{ ipv4 }}">
+  Secondary address {{ ipv4 }}/{{ prefix_length }}
+</group>
+</group>
+
+
+<group name="result**.{{ interface }}**" input="show_ipv6_interface">
+{{ interface }} is {{ ignore("ORPHRASE") }}, line protocol is {{ ignore("ORPHRASE") }}
+<group name="ipv6**.{{ ipv6 }}">
+  IPv6 is enabled, link-local address is {{ ipv6 }}
+  IPv6 is tentative, link-local address is {{ ipv6 | _start_ }} [TEN]
+  {{ prefix_length | set(10) }}
+</group>
+<group name="ipv6**.{{ ipv6 }}">
+    {{ ipv6 }}, subnet is {{ ignore }}/{{ prefix_length }}
+    {{ ipv6 | _start_ }}, subnet is {{ ignore }}/{{ prefix_length }} [TEN]
+</group>
+</group>
+
+<output macro="delete_empty"/>
+
+<macro>
+def delete_empty(data):
+    # function to delete empty interfaces
+    data[0]["result"] = {intf_name: intf_det 
+                         for intf_name, intf_det in data[0]["result"].items() 
+                         if intf_det}           
+</macro>
+</template>
