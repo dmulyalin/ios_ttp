@@ -1,0 +1,96 @@
+<template
+description="
+Sample Data::
+
+    R1#show lldp nei detail
+    ------------------------------------------------
+    Local Intf: Et0/0
+    Chassis id: aabb.cc00.2000
+    Port id: Et0/0
+    Port Description: Ethernet0/0
+    System Name: R2
+    
+    System Description:
+    Cisco IOS Software, Linux Software (I86BI_LINUX-ADVENTERPRISEK9-M), Version 15.7(3)M2, DEVELOPMENT TEST SOFTWARE
+    Technical Support: http://www.cisco.com/techsupport
+    Copyright (c) 1986-2018 by Cisco Systems, Inc.
+    Compiled Wed 28-Mar-18 11:18 by prod_rel_te
+    
+    Time remaining: 108 seconds
+    System Capabilities: B,R
+    Enabled Capabilities: R
+    Management Addresses - not advertised
+    Auto Negotiation - not supported
+    Physical media capabilities - not advertised
+    Media Attachment Unit type - not advertised
+    Vlan ID: - not advertised
+    
+    
+    Total entries displayed: 1
+    
+    R1#
+
+Sample Output::
+
+    {'Et0/0': [{'remote_chassis_id': 'aabb.cc00.2000',
+                'remote_port': 'Et0/0',
+                'remote_port_description': 'Ethernet0/0',
+                'remote_system_capab': ['bridge', 'router'],
+                'remote_system_description': {'remote_system_description': 'Cisco IOS Software, Linux Software (I86BI_LINUX-ADVENTERPRISEK9-M), Version 15.7(3)M2, DEVELOPMENT TEST SOFTWARE Technical Support: http://www.cisco.com/techsupport Copyright (c) 1986-2018 by Cisco Systems, Inc. Compiled Wed 28-Mar-18 11:18 by prod_rel_te'},
+                'remote_system_enable_capab': ['router'],
+                'remote_system_name': 'R2'}]}
+"
+>
+
+<input name="show_lldp_neighbors_detail" commands="show lldp neighbors detail"/>
+
+<lookup name="capabilities" load="ini">
+[codes]
+B: Bridge
+R: Router
+T: Telephone
+C: DOCSIS Cable Device
+W: WLAN Access Point
+P: Repeater
+S: Station
+O: Other
+</lookup>
+
+<macro>
+def add_capabilities(data):
+    return [
+        _ttp_["match"]["rlookup"](data=item, name="capabilities.codes")[0] 
+        for item in data
+    ]
+</macro>
+
+<macro>
+def merge_remote_system_description(data):
+    for intf_name, intf_peers in data[0]["result"].items():
+        for peer in intf_peers:
+            peer["remote_system_description"] = peer.get(
+                "remote_system_description", {}).get(
+                    "remote_system_description", "")
+</macro>
+
+<group name="result**.{{ interface }}*">
+------------------------------------------------ {{ _start_ }}
+Local Intf: {{ interface }}
+Chassis id: {{ remote_chassis_id }}
+Port id: {{ remote_port }}
+Port Description: {{ remote_port_description }}
+System Name: {{ remote_system_name }}
+
+<group name="remote_system_description">
+System Description: {{ _start_ }}
+{{ remote_system_description | _line_ | joinmatches(" ") }}
+Time remaining: {{ ignore }} seconds {{ _end_ }}
+</group>
+
+System Capabilities: {{ remote_system_capab | split(",") | macro("add_capabilities") }}
+Enabled Capabilities: {{ remote_system_enable_capab | split(",") | macro("add_capabilities") }}
+</group>
+
+<output macro="merge_remote_system_description"/>
+
+</template>

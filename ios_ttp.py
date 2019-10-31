@@ -107,18 +107,22 @@ class getter():
             self.template = f.read()
         
 
-    def getter(self):
+    def getter(self, **kwargs):
         commands_output = {}
         result = {}
         prompt = self.driver_obj.device.find_prompt()
-        parser = ttp(template=self.template)
+        parser = ttp(template=self.template, log_level="Error")
         inputs_commands = parser.get_input_commands_dict()
         # obtain output from device
         for input_name, commands_list in inputs_commands.items():
             commands_output[input_name] = ""
+            # if commands list provided on class __call__ - use it
+            if kwargs.get("commands", False):
+                if isinstance(kwargs["commands"], list):
+                    commands_list = kwargs["commands"]
             for command in commands_list:
-                 command_output = self.driver_obj._send_command(command)
-                 commands_output[input_name] += "\n{}{}\n{}\n".format(prompt, command, command_output)
+                command_output = self.driver_obj._send_command(command)
+                commands_output[input_name] += "\n{}{}\n{}\n".format(prompt, command, command_output)
         # parse commands output
         for input_name, output in commands_output.items():
             parser.add_input(data=output, input_name=input_name)
@@ -126,8 +130,8 @@ class getter():
         result.update(parser.result()[0][0]["result"])
         return result    
         
-    def __call__(self):
-        return self.getter()
+    def __call__(self, **kwargs):
+        return self.getter(**kwargs)
         
 
 class IOSDriver_TTP(NetworkDriver):
@@ -145,6 +149,7 @@ class IOSDriver_TTP(NetworkDriver):
         self.transport = optional_args.get("transport", "ssh")
         
         #add getters to object
+        self.ttp_templates_dir = "{}/utils/ttp_templates/".format(os.path.dirname(__file__))
         self.set_getters()
 
         # Retrieve file names
@@ -182,14 +187,17 @@ class IOSDriver_TTP(NetworkDriver):
         self.use_canonical_interface = optional_args.get("canonical_int", False)
 
     def set_getters(self):
-        # load all available templates names
-        path = "{}/utils/ttp_templates/".format(os.path.dirname(__file__))
+        # load all available templates by names
         templates = [f.split(".")[0] 
-                     for f in os.listdir(path) if os.path.isfile(path + f)]      
-        # add methods to driver
+                     for f in os.listdir(self.ttp_templates_dir) if (
+                         os.path.isfile(self.ttp_templates_dir + f) and
+                         not f.startswith("_")
+                    )]      
+                    
+        # add getter methods to driver
         [setattr(self, name, getter(
                     driver_obj=self,
-                    filename="{}{}.txt".format(path, name))
+                    filename="{}{}.txt".format(self.ttp_templates_dir, name))
                 )
          for name in templates]
     
@@ -875,59 +883,18 @@ class IOSDriver_TTP(NetworkDriver):
         return lldp
 
     def get_lldp_neighbors_detail(self, interface=""):
-        lldp = {}
-        lldp_interfaces = []
-
+        # create ttp getter object
+        ttp_getter = getter(driver_obj=self, filename="{}{}.txt".format(
+            self.ttp_templates_dir, "_get_lldp_neighbors_detail"))
+        
+        # get commands
         if interface:
-            command = "show lldp neighbors {} detail".format(interface)
+            commands = ["show lldp neighbors {} detail".format(interface)]
         else:
-            command = "show lldp neighbors detail"
-        lldp_entries = self._send_command(command)
-        lldp_entries = textfsm_extractor(
-            self, "show_lldp_neighbors_detail", lldp_entries
-        )
-
-        if len(lldp_entries) == 0:
-            return {}
-
-        # Older IOS versions don't have 'Local Intf' defined in LLDP detail.
-        # We need to get them from the non-detailed command
-        # which is in the same sequence as the detailed output
-        if not lldp_entries[0]["local_interface"]:
-            if interface:
-                command = "show lldp neighbors {}".format(interface)
-            else:
-                command = "show lldp neighbors"
-            lldp_brief = self._send_command(command)
-            lldp_interfaces = textfsm_extractor(self, "show_lldp_neighbors", lldp_brief)
-            lldp_interfaces = [x["local_interface"] for x in lldp_interfaces]
-            if len(lldp_interfaces) != len(lldp_entries):
-                raise ValueError(
-                    "LLDP neighbor count has changed between commands. "
-                    "Interface: {}\nEntries: {}".format(lldp_interfaces, lldp_entries)
-                )
-
-        for idx, lldp_entry in enumerate(lldp_entries):
-            local_intf = lldp_entry.pop("local_interface") or lldp_interfaces[idx]
-            # Convert any 'not advertised' to an empty string
-            for field in lldp_entry:
-                if "not advertised" in lldp_entry[field]:
-                    lldp_entry[field] = ""
-            # Add field missing on IOS
-            lldp_entry["parent_interface"] = ""
-            # Translate the capability fields
-            lldp_entry["remote_system_capab"] = transform_lldp_capab(
-                lldp_entry["remote_system_capab"]
-            )
-            lldp_entry["remote_system_enable_capab"] = transform_lldp_capab(
-                lldp_entry["remote_system_enable_capab"]
-            )
-            # Turn the interfaces into their long version
-            local_intf = canonical_interface_name(local_intf)
-            lldp.setdefault(local_intf, [])
-            lldp[local_intf].append(lldp_entry)
-
-        return lldp
+            commands = ["show lldp neighbors detail"]
+            
+        # retrieve commands output and run parsing
+        return ttp_getter(commands=commands) 
 
     @staticmethod
     def parse_uptime(uptime_str):
@@ -961,79 +928,6 @@ class IOSDriver_TTP(NetworkDriver):
             + (minutes * 60)
         )
         return uptime_sec    
-
-    #ef get_interfaces_ip(self):
-    #   """
-    #   Get interface ip details.
-	#
-    #   Returns a dict of dicts
-	#
-    #   Example Output:
-	#
-    #   {   u'FastEthernet8': {   'ipv4': {   u'10.66.43.169': {   'prefix_length': 22}}},
-    #       u'Loopback555': {   'ipv4': {   u'192.168.1.1': {   'prefix_length': 24}},
-    #                           'ipv6': {   u'1::1': {   'prefix_length': 64},
-    #                                       u'2001:DB8:1::1': {   'prefix_length': 64},
-    #                                       u'2::': {   'prefix_length': 64},
-    #                                       u'FE80::3': {   'prefix_length': 10}}},
-    #       u'Tunnel0': {   'ipv4': {   u'10.63.100.9': {   'prefix_length': 24}}},
-    #       u'Tunnel1': {   'ipv4': {   u'10.63.101.9': {   'prefix_length': 24}}},
-    #       u'Vlan100': {   'ipv4': {   u'10.40.0.1': {   'prefix_length': 24},
-    #                                   u'10.41.0.1': {   'prefix_length': 24},
-    #                                   u'10.65.0.1': {   'prefix_length': 24}}},
-    #       u'Vlan200': {   'ipv4': {   u'10.63.176.57': {   'prefix_length': 29}}}}
-    #   """
-    #   interfaces = {}
-	#
-    #   command = "show ip interface"
-    #   show_ip_interface = self._send_command(command)
-    #   command = "show ipv6 interface"
-    #   show_ipv6_interface = self._send_command(command)
-	#
-    #   INTERNET_ADDRESS = r"\s+(?:Internet address is|Secondary address)"
-    #   INTERNET_ADDRESS += r" (?P<ip>{})/(?P<prefix>\d+)".format(IPV4_ADDR_REGEX)
-    #   LINK_LOCAL_ADDRESS = (
-    #       r"\s+IPv6 is enabled, link-local address is (?P<ip>[a-fA-F0-9:]+)"
-    #   )
-    #   GLOBAL_ADDRESS = (
-    #       r"\s+(?P<ip>[a-fA-F0-9:]+), subnet is (?:[a-fA-F0-9:]+)/(?P<prefix>\d+)"
-    #   )
-	#
-    #   interfaces = {}
-    #   for line in show_ip_interface.splitlines():
-    #       if len(line.strip()) == 0:
-    #           continue
-    #       if line[0] != " ":
-    #           ipv4 = {}
-    #           interface_name = line.split()[0]
-    #       m = re.match(INTERNET_ADDRESS, line)
-    #       if m:
-    #           ip, prefix = m.groups()
-    #           ipv4.update({ip: {"prefix_length": int(prefix)}})
-    #           interfaces[interface_name] = {"ipv4": ipv4}
-	#
-    #   if "% Invalid input detected at" not in show_ipv6_interface:
-    #       for line in show_ipv6_interface.splitlines():
-    #           if len(line.strip()) == 0:
-    #               continue
-    #           if line[0] != " ":
-    #               ifname = line.split()[0]
-    #               ipv6 = {}
-    #               if ifname not in interfaces:
-    #                   interfaces[ifname] = {"ipv6": ipv6}
-    #               else:
-    #                   interfaces[ifname].update({"ipv6": ipv6})
-    #           m = re.match(LINK_LOCAL_ADDRESS, line)
-    #           if m:
-    #               ip = m.group(1)
-    #               ipv6.update({ip: {"prefix_length": 10}})
-    #           m = re.match(GLOBAL_ADDRESS, line)
-    #           if m:
-    #               ip, prefix = m.groups()
-    #               ipv6.update({ip: {"prefix_length": int(prefix)}})
-	#
-    #   # Interface without ipv6 doesn't appears in show ipv6 interface
-    #   return interfaces
 
     @staticmethod
     def bgp_time_conversion(bgp_uptime):
