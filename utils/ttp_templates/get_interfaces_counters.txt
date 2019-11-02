@@ -1,0 +1,38 @@
+<template results="per_template"
+description="
+Returns per-interface dictionary with these counters:
+'tx_errors': int,
+'rx_errors': int,
+'tx_discards': int,
+'rx_discards': int,
+'tx_octets': int,
+'rx_octets': int,
+'tx_unicast_packets': int,
+'rx_unicast_packets': int,
+'tx_multicast_packets': int,
+'rx_multicast_packets': int,
+'tx_broadcast_packets': int,
+'rx_broadcast_packets': int,
+"
+>
+
+<input name="show_interfaces"         commands="show interfaces"/>
+<input name="show_interfaces_summary" commands="show interfaces summary"/>
+
+<group name="result**.{{ interface }}**" default="-1" input="show_interfaces">
+{{ interface }} is {{ ignore("ORPHRASE") }}, line protocol is {{ ignore("ORPHRASE") }}
+     {{ rx_unicast_packets | to_int }} packets input, {{ rx_octets | to_int  }} bytes, 0 no buffer
+     Received {{ rx_broadcast_packets | to_int }} broadcasts ({{ rx_multicast_packets | to_int }} IP multicasts)
+     {{ rx_errors | to_int }} input errors, {{ rx_crc_errors | to_int }} CRC, 0 frame, 0 overrun, 0 ignored
+     {{ tx_unicast_packets | to_int }} packets output, {{ tx_octets | to_int }} bytes, 0 underruns
+     {{ tx_errors | to_int }} output errors, {{ tx_collisions | to_int }} collisions, 1 interface resets
+{{ tx_broadcast_packets | set(-1) }}
+{{ tx_multicast_packets | set(-1) }}
+</group>
+
+<group name="result**.{{ interface }}**" input="show_interfaces_summary" method="table">
+* {{ interface }}   0  {{ rx_discards | to_int }}  0   {{ tx_discards | to_int }}   0     0     0     0     0
+  {{ interface }}   0  {{ rx_discards | to_int }}  0   {{ tx_discards | to_int }}   0     0     0     0     0
+</group>
+
+</template>
